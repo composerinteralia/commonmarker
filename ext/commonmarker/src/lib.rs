@@ -1,168 +1,204 @@
-extern crate core;
+use std::ffi::{c_char, CString};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::slice;
 
-use std::fmt::{self, Write};
+use comrak::options::Plugins;
+use comrak::{parse_document, Arena};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use comrak::parse_document;
-use magnus::{function, scan_args, RHash, RString, Ruby, Value};
-use node::CommonmarkerNode;
-use plugins::syntax_highlighting::construct_syntax_highlighter_from_plugin;
-
-mod options;
-
-mod plugins;
-
-use rb_allocator::ruby_global_allocator;
-use typed_arena::Arena;
-
-use crate::options::{iterate_extension_options, iterate_parse_options, iterate_render_options};
+use node::WireNode;
 
 mod node;
-mod utils;
+mod options;
+mod plugins;
 
-pub const EMPTY_STR: &str = "";
+#[derive(Debug, Deserialize)]
+struct Request {
+    operation: String,
+    #[serde(default)]
+    markdown: String,
+    #[serde(default)]
+    options: Value,
+    #[serde(default)]
+    plugins: Value,
+    node: Option<WireNode>,
+    format: Option<String>,
+}
 
-// Inform Ruby's GC about memory allocations.
-ruby_global_allocator!();
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum Response {
+    Success { ok: bool, value: Value },
+    Failure { ok: bool, error: ErrorResponse },
+}
 
-/// A writer that writes directly to a Ruby String, avoiding intermediate Rust allocations.
-struct RStringWriter(RString);
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    kind: &'static str,
+    message: String,
+}
 
-impl Write for RStringWriter {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.0.cat(s);
-        Ok(())
+#[derive(Debug)]
+pub struct CallError {
+    kind: &'static str,
+    message: String,
+}
+
+impl CallError {
+    pub fn argument_error(message: impl Into<String>) -> Self {
+        Self {
+            kind: "argument",
+            message: message.into(),
+        }
+    }
+
+    pub fn type_error(message: impl Into<String>) -> Self {
+        Self {
+            kind: "type",
+            message: message.into(),
+        }
+    }
+
+    fn runtime_error(message: impl Into<String>) -> Self {
+        Self {
+            kind: "runtime",
+            message: message.into(),
+        }
     }
 }
 
-fn commonmark_parse(ruby: &Ruby, args: &[Value]) -> Result<CommonmarkerNode, magnus::Error> {
-    let args = scan_args::scan_args::<_, (), (), (), _, ()>(args)?;
-    let (rb_commonmark,): (RString,) = args.required;
+#[no_mangle]
+pub unsafe extern "C" fn commonmarker_call(input: *const u8, input_len: usize) -> *mut c_char {
+    let response = catch_unwind(AssertUnwindSafe(|| {
+        if input.is_null() {
+            return failure(CallError::argument_error("input pointer cannot be null"));
+        }
 
-    // SAFETY: We hold the GVL and rb_commonmark won't be modified until we return
-    let commonmark_str = unsafe {
-        rb_commonmark.as_str().map_err(|e| {
-            magnus::Error::new(
-                ruby.exception_encoding_error(),
-                format!("invalid UTF-8: {}", e),
-            )
-        })?
-    };
+        let bytes = unsafe { slice::from_raw_parts(input, input_len) };
+        let request = serde_json::from_slice(bytes)
+            .map_err(|error| CallError::argument_error(format!("invalid request: {error}")));
 
-    let kwargs = scan_args::get_kwargs::<_, (), (Option<RHash>, Option<RHash>, Option<RHash>), ()>(
-        args.keywords,
-        &[],
-        &["parse", "render", "extension"],
-    )?;
-    let (rb_parse, rb_render, rb_extension) = kwargs.optional;
+        match request.and_then(handle_request) {
+            Ok(value) => Response::Success {
+                ok: true,
+                value,
+            },
+            Err(error) => failure(error),
+        }
+    }))
+    .unwrap_or_else(|payload| {
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|message| (*message).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "Rust panic".to_owned());
+        failure(CallError::runtime_error(message))
+    });
 
-    let mut comrak_parse_options = comrak::options::Parse::default();
-    let mut comrak_render_options = comrak::options::Render::default();
-    let mut comrak_extension_options = comrak::options::Extension::default();
+    let json = serde_json::to_string(&response).unwrap_or_else(|error| {
+        format!(
+            r#"{{"ok":false,"error":{{"kind":"runtime","message":"response serialization failed: {error}"}}}}"#
+        )
+    });
+    CString::new(json)
+        .expect("JSON responses cannot contain null bytes")
+        .into_raw()
+}
 
-    if let Some(rb_parse) = rb_parse {
-        iterate_parse_options(&mut comrak_parse_options, rb_parse);
+#[no_mangle]
+pub unsafe extern "C" fn commonmarker_free(pointer: *mut c_char) {
+    if !pointer.is_null() {
+        drop(unsafe { CString::from_raw(pointer) });
     }
-    if let Some(rb_render) = rb_render {
-        iterate_render_options(&mut comrak_render_options, rb_render);
-    }
-    if let Some(rb_extension) = rb_extension {
-        iterate_extension_options(&mut comrak_extension_options, rb_extension);
-    }
+}
 
-    let comrak_options = comrak::Options {
-        parse: comrak_parse_options,
-        render: comrak_render_options,
-        extension: comrak_extension_options,
-    };
+fn handle_request(request: Request) -> Result<Value, CallError> {
+    match request.operation.as_str() {
+        "parse" => parse(&request),
+        "render_markdown" => render_markdown(&request),
+        "render_ast" => render_ast(&request),
+        operation => Err(CallError::argument_error(format!(
+            "unknown operation `{operation}`"
+        ))),
+    }
+}
+
+fn parse(request: &Request) -> Result<Value, CallError> {
+    let options = options::build_options(&request.options);
+    let arena = Arena::new();
+    let root = parse_document(&arena, &request.markdown, &options);
+    serde_json::to_value(WireNode::from_comrak(root))
+        .map_err(|error| CallError::runtime_error(error.to_string()))
+}
+
+fn render_markdown(request: &Request) -> Result<Value, CallError> {
+    let options = options::build_options(&request.options);
+    let adapter = plugins::syntax_highlighter(&request.plugins)?;
+    let mut comrak_plugins = Plugins::default();
+    comrak_plugins.render.codefence_syntax_highlighter = adapter
+        .as_ref()
+        .map(|adapter| adapter as &dyn comrak::adapters::SyntaxHighlighterAdapter);
 
     let arena = Arena::new();
-    let root = parse_document(&arena, commonmark_str, &comrak_options);
+    let root = parse_document(&arena, &request.markdown, &options);
+    let mut output = String::with_capacity(request.markdown.len() * 2);
+    comrak::html::format_document_with_plugins(
+        root,
+        &options,
+        &mut output,
+        &comrak_plugins,
+    )
+    .map_err(|error| CallError::runtime_error(error.to_string()))?;
 
-    CommonmarkerNode::new_from_comrak_node(root)
+    Ok(Value::String(output))
 }
 
-fn commonmark_to_html(ruby: &Ruby, args: &[Value]) -> Result<RString, magnus::Error> {
-    let args = scan_args::scan_args::<_, (), (), (), _, ()>(args)?;
-    let (rb_commonmark,): (RString,) = args.required;
+fn render_ast(request: &Request) -> Result<Value, CallError> {
+    let wire_node = request
+        .node
+        .as_ref()
+        .ok_or_else(|| CallError::argument_error("render_ast requires a node"))?;
+    let options = options::build_options(&request.options);
+    let adapter = plugins::syntax_highlighter(&request.plugins)?;
+    let mut comrak_plugins = Plugins::default();
+    comrak_plugins.render.codefence_syntax_highlighter = adapter
+        .as_ref()
+        .map(|adapter| adapter as &dyn comrak::adapters::SyntaxHighlighterAdapter);
 
-    // SAFETY: We hold the GVL and rb_commonmark won't be modified until we return
-    let commonmark_str = unsafe {
-        rb_commonmark.as_str().map_err(|e| {
-            magnus::Error::new(
-                ruby.exception_encoding_error(),
-                format!("invalid UTF-8: {}", e),
-            )
-        })?
-    };
-
-    let kwargs = scan_args::get_kwargs::<
-        _,
-        (),
-        (Option<RHash>, Option<RHash>, Option<RHash>, Option<RHash>),
-        (),
-    >(
-        args.keywords,
-        &[],
-        &["render", "parse", "extension", "plugins"],
-    )?;
-    let (rb_render, rb_parse, rb_extension, rb_plugins) = kwargs.optional;
-
-    let mut comrak_parse_options = comrak::options::Parse::default();
-    let mut comrak_render_options = comrak::options::Render::default();
-    let mut comrak_extension_options = comrak::options::Extension::default();
-
-    if let Some(rb_parse) = rb_parse {
-        iterate_parse_options(&mut comrak_parse_options, rb_parse);
-    }
-    if let Some(rb_render) = rb_render {
-        iterate_render_options(&mut comrak_render_options, rb_render);
-    }
-    if let Some(rb_extension) = rb_extension {
-        iterate_extension_options(&mut comrak_extension_options, rb_extension);
-    }
-
-    let mut comrak_plugins = comrak::options::Plugins::default();
-
-    let syntect_adapter = match construct_syntax_highlighter_from_plugin(ruby, rb_plugins) {
-        Ok(Some(adapter)) => Some(adapter),
-        Ok(None) => None,
-        Err(err) => return Err(err),
-    };
-
-    match syntect_adapter {
-        Some(ref adapter) => comrak_plugins.render.codefence_syntax_highlighter = Some(adapter),
-        None => comrak_plugins.render.codefence_syntax_highlighter = None,
-    }
-
-    let comrak_options = comrak::Options {
-        parse: comrak_parse_options,
-        render: comrak_render_options,
-        extension: comrak_extension_options,
-    };
-
-    // Pre-allocate Ruby string with estimated capacity (assume HTML is typically 2x commonmark size)
-    let output = ruby.str_with_capacity(commonmark_str.len() * 2);
-    let mut writer = RStringWriter(output);
-
-    // Parse and render directly to Ruby string, avoiding intermediate Rust String allocation
     let arena = Arena::new();
-    let root = parse_document(&arena, commonmark_str, &comrak_options);
+    let root = wire_node.to_comrak(&arena)?;
+    let mut output = String::new();
+    match request.format.as_deref().unwrap_or("html") {
+        "html" => comrak::format_html_with_plugins(
+            root,
+            &options,
+            &mut output,
+            &comrak_plugins,
+        ),
+        "commonmark" => comrak::format_commonmark_with_plugins(
+            root,
+            &options,
+            &mut output,
+            &comrak_plugins,
+        ),
+        format => {
+            return Err(CallError::argument_error(format!(
+                "unknown render format `{format}`"
+            )))
+        }
+    }
+    .map_err(|error| CallError::runtime_error(error.to_string()))?;
 
-    comrak::html::format_document_with_plugins(root, &comrak_options, &mut writer, &comrak_plugins)
-        .map_err(|e| magnus::Error::new(ruby.exception_runtime_error(), e.to_string()))?;
-
-    Ok(output)
+    Ok(Value::String(output))
 }
 
-#[magnus::init]
-fn init(ruby: &Ruby) -> Result<(), magnus::Error> {
-    let m_commonmarker = ruby.define_module("Commonmarker")?;
-
-    m_commonmarker.define_module_function("commonmark_parse", function!(commonmark_parse, -1))?;
-    m_commonmarker
-        .define_module_function("commonmark_to_html", function!(commonmark_to_html, -1))?;
-
-    node::init(ruby, m_commonmarker).expect("cannot define Commonmarker::Node class");
-
-    Ok(())
+fn failure(error: CallError) -> Response {
+    Response::Failure {
+        ok: false,
+        error: ErrorResponse {
+            kind: error.kind,
+            message: error.message,
+        },
+    }
 }

@@ -23,7 +23,8 @@ module Commonmarker
 
       opts = Config.process_options(options)
 
-      commonmark_parse(text, parse: opts.fetch(:parse, {}), render: opts.fetch(:render, {}), extension: opts.fetch(:extension, {}))
+      wire_node = Native.call(:parse, markdown: text, options: opts)
+      Node.from_wire(wire_node)
     end
 
     # Public: Parses a CommonMark string into an HTML string.
@@ -41,7 +42,7 @@ module Commonmarker
       opts = Config.process_options(options)
       plugins = Config.process_plugins(plugins)
 
-      commonmark_to_html(text, parse: opts.fetch(:parse, {}), render: opts.fetch(:render, {}), extension: opts.fetch(:extension, {}), plugins: plugins)
+      Native.call(:render_markdown, markdown: text, options: opts, plugins: plugins).force_encoding("utf-8")
     end
   end
 end

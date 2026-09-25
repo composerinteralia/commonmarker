@@ -1,252 +1,198 @@
-use std::borrow::Cow;
+use serde_json::Value;
 
-use magnus::TryConvert;
-use magnus::{r_hash::ForEach, RHash, Symbol, Value};
-
-use crate::utils::try_convert_string;
-
-const PARSE_SMART: &str = "smart";
-const PARSE_DEFAULT_INFO_STRING: &str = "default_info_string";
-const PARSE_RELAXED_TASKLIST_MATCHING: &str = "relaxed_tasklist_matching";
-const PARSE_RELAXED_AUTOLINKS: &str = "relaxed_autolinks";
-const PARSE_LEAVE_FOOTNOTE_DEFINITIONS: &str = "leave_footnote_definitions";
-const PARSE_SOURCEPOS_CHARS: &str = "sourcepos_chars";
-
-pub fn iterate_parse_options(comrak_options: &mut comrak::options::Parse, options_hash: RHash) {
-    options_hash
-        .foreach(|key: Symbol, value: Value| {
-            match key.name()? {
-                Cow::Borrowed(PARSE_SMART) => {
-                    comrak_options.smart = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(PARSE_DEFAULT_INFO_STRING) => {
-                    comrak_options.default_info_string = try_convert_string(value);
-                }
-                Cow::Borrowed(PARSE_RELAXED_TASKLIST_MATCHING) => {
-                    comrak_options.relaxed_tasklist_matching = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_IGNORE_SETEXT) => {
-                    comrak_options.ignore_setext = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(PARSE_RELAXED_AUTOLINKS) => {
-                    comrak_options.relaxed_autolinks = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(PARSE_LEAVE_FOOTNOTE_DEFINITIONS) => {
-                    comrak_options.leave_footnote_definitions = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(PARSE_SOURCEPOS_CHARS) => {
-                    comrak_options.sourcepos_chars = TryConvert::try_convert(value)?;
-                }
-                _ => {}
-            }
-            Ok(ForEach::Continue)
-        })
-        .unwrap();
+fn object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+    value.as_object()
 }
 
-const RENDER_HARDBREAKS: &str = "hardbreaks";
-const RENDER_GITHUB_PRE_LANG: &str = "github_pre_lang";
-const RENDER_FULL_INFO_STRING: &str = "full_info_string";
-const RENDER_WIDTH: &str = "width";
-const RENDER_UNSAFE: &str = "unsafe";
-const RENDER_ESCAPE: &str = "escape";
-const RENDER_SOURCEPOS: &str = "sourcepos";
-const RENDER_ESCAPED_CHAR_SPANS: &str = "escaped_char_spans";
-const RENDER_IGNORE_SETEXT: &str = "ignore_setext";
-const RENDER_IGNORE_EMPTY_LINKS: &str = "ignore_empty_links";
-const RENDER_GFM_QUIRKS: &str = "gfm_quirks";
-const RENDER_PREFER_FENCED: &str = "prefer_fenced";
-const RENDER_TASKLIST_CLASSES: &str = "tasklist_classes";
-const RENDER_COMPACT_HTML: &str = "compact_html";
-const RENDER_ALERT_STYLE: &str = "alert_style";
+pub fn build_options(value: &Value) -> comrak::Options<'static> {
+    let mut options = comrak::Options::default();
+    let Some(groups) = object(value) else {
+        return options;
+    };
 
-pub fn iterate_render_options(comrak_options: &mut comrak::options::Render, options_hash: RHash) {
-    options_hash
-        .foreach(|key: Symbol, value: Value| {
-            match key.name()? {
-                Cow::Borrowed(RENDER_HARDBREAKS) => {
-                    comrak_options.hardbreaks = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_GITHUB_PRE_LANG) => {
-                    comrak_options.github_pre_lang = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_FULL_INFO_STRING) => {
-                    comrak_options.full_info_string = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_WIDTH) => {
-                    comrak_options.width = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_UNSAFE) => {
-                    comrak_options.r#unsafe = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_ESCAPE) => {
-                    comrak_options.escape = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_SOURCEPOS) => {
-                    comrak_options.sourcepos = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_ESCAPED_CHAR_SPANS) => {
-                    comrak_options.escaped_char_spans = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_IGNORE_EMPTY_LINKS) => {
-                    comrak_options.ignore_empty_links = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_GFM_QUIRKS) => {
-                    comrak_options.gfm_quirks = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_PREFER_FENCED) => {
-                    comrak_options.prefer_fenced = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_TASKLIST_CLASSES) => {
-                    comrak_options.tasklist_classes = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_COMPACT_HTML) => {
-                    comrak_options.compact_html = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(RENDER_ALERT_STYLE) => {
-                    comrak_options.alert_style = match try_convert_string(value).as_deref() {
-                        Some("semantic") => comrak::options::AlertStyleType::Semantic,
-                        _ => comrak::options::AlertStyleType::Specific,
-                    };
-                }
-                _ => {}
-            }
-            Ok(ForEach::Continue)
-        })
-        .unwrap();
+    if let Some(parse) = groups.get("parse").and_then(object) {
+        set_bool(parse, "smart", &mut options.parse.smart);
+        set_optional_string(
+            parse,
+            "default_info_string",
+            &mut options.parse.default_info_string,
+        );
+        set_bool(
+            parse,
+            "relaxed_tasklist_matching",
+            &mut options.parse.relaxed_tasklist_matching,
+        );
+        set_bool(
+            parse,
+            "relaxed_autolinks",
+            &mut options.parse.relaxed_autolinks,
+        );
+        set_bool(
+            parse,
+            "leave_footnote_definitions",
+            &mut options.parse.leave_footnote_definitions,
+        );
+        set_bool(parse, "ignore_setext", &mut options.parse.ignore_setext);
+        set_bool(
+            parse,
+            "sourcepos_chars",
+            &mut options.parse.sourcepos_chars,
+        );
+    }
+
+    if let Some(render) = groups.get("render").and_then(object) {
+        set_bool(render, "hardbreaks", &mut options.render.hardbreaks);
+        set_bool(
+            render,
+            "github_pre_lang",
+            &mut options.render.github_pre_lang,
+        );
+        set_bool(
+            render,
+            "full_info_string",
+            &mut options.render.full_info_string,
+        );
+        set_usize(render, "width", &mut options.render.width);
+        set_bool(render, "unsafe", &mut options.render.r#unsafe);
+        set_bool(render, "escape", &mut options.render.escape);
+        set_bool(render, "sourcepos", &mut options.render.sourcepos);
+        set_bool(
+            render,
+            "escaped_char_spans",
+            &mut options.render.escaped_char_spans,
+        );
+        set_bool(
+            render,
+            "ignore_empty_links",
+            &mut options.render.ignore_empty_links,
+        );
+        set_bool(render, "gfm_quirks", &mut options.render.gfm_quirks);
+        set_bool(
+            render,
+            "prefer_fenced",
+            &mut options.render.prefer_fenced,
+        );
+        set_bool(
+            render,
+            "tasklist_classes",
+            &mut options.render.tasklist_classes,
+        );
+        set_bool(
+            render,
+            "compact_html",
+            &mut options.render.compact_html,
+        );
+        if render.get("alert_style").and_then(Value::as_str) == Some("semantic") {
+            options.render.alert_style = comrak::options::AlertStyleType::Semantic;
+        }
+    }
+
+    if let Some(extension) = groups.get("extension").and_then(object) {
+        set_bool(
+            extension,
+            "strikethrough",
+            &mut options.extension.strikethrough,
+        );
+        #[allow(deprecated)]
+        set_bool(extension, "tagfilter", &mut options.extension.tagfilter);
+        set_bool(extension, "table", &mut options.extension.table);
+        set_bool(extension, "autolink", &mut options.extension.autolink);
+        set_bool(extension, "tasklist", &mut options.extension.tasklist);
+        set_bool(
+            extension,
+            "superscript",
+            &mut options.extension.superscript,
+        );
+        if let Some(value) = extension.get("header_ids").and_then(Value::as_str) {
+            options.extension.header_id_prefix = Some(value.to_owned());
+        }
+        set_bool(
+            extension,
+            "header_id_prefix_in_href",
+            &mut options.extension.header_id_prefix_in_href,
+        );
+        set_bool(extension, "footnotes", &mut options.extension.footnotes);
+        set_bool(
+            extension,
+            "inline_footnotes",
+            &mut options.extension.inline_footnotes,
+        );
+        set_bool(
+            extension,
+            "description_lists",
+            &mut options.extension.description_lists,
+        );
+        if let Some(value) = extension
+            .get("front_matter_delimiter")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        {
+            options.extension.front_matter_delimiter = Some(value.to_owned());
+        }
+        set_bool(
+            extension,
+            "multiline_block_quotes",
+            &mut options.extension.multiline_block_quotes,
+        );
+        set_bool(
+            extension,
+            "math_dollars",
+            &mut options.extension.math_dollars,
+        );
+        set_bool(extension, "math_code", &mut options.extension.math_code);
+        set_bool(extension, "math_latex", &mut options.extension.math_latex);
+        set_bool(extension, "shortcodes", &mut options.extension.shortcodes);
+        set_bool(
+            extension,
+            "wikilinks_title_after_pipe",
+            &mut options.extension.wikilinks_title_after_pipe,
+        );
+        set_bool(
+            extension,
+            "wikilinks_title_before_pipe",
+            &mut options.extension.wikilinks_title_before_pipe,
+        );
+        set_bool(extension, "underline", &mut options.extension.underline);
+        set_bool(extension, "spoiler", &mut options.extension.spoiler);
+        set_bool(extension, "greentext", &mut options.extension.greentext);
+        set_bool(extension, "subscript", &mut options.extension.subscript);
+        set_bool(extension, "subtext", &mut options.extension.subtext);
+        set_bool(extension, "alerts", &mut options.extension.alerts);
+        set_bool(
+            extension,
+            "cjk_friendly_emphasis",
+            &mut options.extension.cjk_friendly_emphasis,
+        );
+        set_bool(extension, "highlight", &mut options.extension.highlight);
+        set_bool(extension, "insert", &mut options.extension.insert);
+        set_bool(
+            extension,
+            "block_directive",
+            &mut options.extension.block_directive,
+        );
+    }
+
+    options
 }
 
-const EXTENSION_STRIKETHROUGH: &str = "strikethrough";
-const EXTENSION_TAGFILTER: &str = "tagfilter";
-const EXTENSION_TABLE: &str = "table";
-const EXTENSION_AUTOLINK: &str = "autolink";
-const EXTENSION_TASKLIST: &str = "tasklist";
-const EXTENSION_SUPERSCRIPT: &str = "superscript";
-const EXTENSION_HEADER_IDS: &str = "header_ids";
-const EXTENSION_HEADER_ID_PREFIX_IN_HREF: &str = "header_id_prefix_in_href";
-const EXTENSION_FOOTNOTES: &str = "footnotes";
-const EXTENSION_INLINE_FOOTNOTES: &str = "inline_footnotes";
-const EXTENSION_DESCRIPTION_LISTS: &str = "description_lists";
-const EXTENSION_FRONT_MATTER_DELIMITER: &str = "front_matter_delimiter";
-const EXTENSION_MULTILINE_BLOCK_QUOTES: &str = "multiline_block_quotes";
-const EXTENSION_MATH_DOLLARS: &str = "math_dollars";
-const EXTENSION_MATH_CODE: &str = "math_code";
-const EXTENSION_MATH_LATEX: &str = "math_latex";
-const EXTENSION_SHORTCODES: &str = "shortcodes";
-const EXTENSION_WIKILINKS_TITLE_AFTER_PIPE: &str = "wikilinks_title_after_pipe";
-const EXTENSION_WIKILINKS_TITLE_BEFORE_PIPE: &str = "wikilinks_title_before_pipe";
-const EXTENSION_UNDERLINE: &str = "underline";
-const EXTENSION_SPOILER: &str = "spoiler";
-const EXTENSION_GREENTEXT: &str = "greentext";
-const EXTENSION_SUBSCRIPT: &str = "subscript";
-const EXTENSION_SUBTEXT: &str = "subtext";
-const EXTENSION_ALERTS: &str = "alerts";
-const EXTENSION_CJK_FRIENDLY_EMPHASIS: &str = "cjk_friendly_emphasis";
-const EXTENSION_HIGHLIGHT: &str = "highlight";
-const EXTENSION_INSERT: &str = "insert";
-const EXTENSION_BLOCK_DIRECTIVE: &str = "block_directive";
+fn set_bool(map: &serde_json::Map<String, Value>, key: &str, target: &mut bool) {
+    if let Some(value) = map.get(key).and_then(Value::as_bool) {
+        *target = value;
+    }
+}
 
-pub fn iterate_extension_options(
-    comrak_options: &mut comrak::options::Extension,
-    options_hash: RHash,
+fn set_usize(map: &serde_json::Map<String, Value>, key: &str, target: &mut usize) {
+    if let Some(value) = map.get(key).and_then(Value::as_u64) {
+        *target = value as usize;
+    }
+}
+
+fn set_optional_string(
+    map: &serde_json::Map<String, Value>,
+    key: &str,
+    target: &mut Option<String>,
 ) {
-    options_hash
-        .foreach(|key: Symbol, value: Value| {
-            match key.name()? {
-                Cow::Borrowed(EXTENSION_STRIKETHROUGH) => {
-                    comrak_options.strikethrough = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_TAGFILTER) => {
-                    comrak_options.tagfilter = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_TABLE) => {
-                    comrak_options.table = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_AUTOLINK) => {
-                    comrak_options.autolink = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_TASKLIST) => {
-                    comrak_options.tasklist = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_SUPERSCRIPT) => {
-                    comrak_options.superscript = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_HEADER_IDS) => {
-                    comrak_options.header_id_prefix = try_convert_string(value);
-                }
-                Cow::Borrowed(EXTENSION_HEADER_ID_PREFIX_IN_HREF) => {
-                    comrak_options.header_id_prefix_in_href = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_FOOTNOTES) => {
-                    comrak_options.footnotes = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_INLINE_FOOTNOTES) => {
-                    comrak_options.inline_footnotes = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_DESCRIPTION_LISTS) => {
-                    comrak_options.description_lists = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_FRONT_MATTER_DELIMITER) => {
-                    if let Some(option) = try_convert_string(value) {
-                        if !option.is_empty() {
-                            comrak_options.front_matter_delimiter = Some(option);
-                        }
-                    }
-                }
-                Cow::Borrowed(EXTENSION_MULTILINE_BLOCK_QUOTES) => {
-                    comrak_options.multiline_block_quotes = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_MATH_DOLLARS) => {
-                    comrak_options.math_dollars = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_MATH_CODE) => {
-                    comrak_options.math_code = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_MATH_LATEX) => {
-                    comrak_options.math_latex = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_SHORTCODES) => {
-                    comrak_options.shortcodes = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_WIKILINKS_TITLE_AFTER_PIPE) => {
-                    comrak_options.wikilinks_title_after_pipe = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_WIKILINKS_TITLE_BEFORE_PIPE) => {
-                    comrak_options.wikilinks_title_before_pipe = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_UNDERLINE) => {
-                    comrak_options.underline = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_SPOILER) => {
-                    comrak_options.spoiler = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_GREENTEXT) => {
-                    comrak_options.greentext = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_SUBSCRIPT) => {
-                    comrak_options.subscript = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_SUBTEXT) => {
-                    comrak_options.subtext = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_ALERTS) => {
-                    comrak_options.alerts = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_CJK_FRIENDLY_EMPHASIS) => {
-                    comrak_options.cjk_friendly_emphasis = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_HIGHLIGHT) => {
-                    comrak_options.highlight = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_INSERT) => {
-                    comrak_options.insert = TryConvert::try_convert(value)?;
-                }
-                Cow::Borrowed(EXTENSION_BLOCK_DIRECTIVE) => {
-                    comrak_options.block_directive = TryConvert::try_convert(value)?;
-                }
-                _ => {}
-            }
-            Ok(ForEach::Continue)
-        })
-        .unwrap();
+    if let Some(value) = map.get(key).and_then(Value::as_str) {
+        *target = Some(value.to_owned());
+    }
 }

@@ -32,5 +32,6 @@ Gem::Specification.new do |spec|
     "rubygems_mfa_required" => "true",
   }
 
+  spec.add_dependency("fiddle", ">= 1.1")
   spec.add_dependency("rb_sys", "~> 0.9")
 end
