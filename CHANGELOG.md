@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Replace the Ruby C extension and bundled libcmark-gfm implementation with a
+  Fiddle interface to a Rust shared library built directly on Comrak.
+
 ## [v0.23.10] (2023-07-31)
 
 - Update GFM release to [`0.29.0.gfm.12`](https://github.com/github/cmark-gfm/releases/tag/0.29.0.gfm.12) and [`0.29.0.gfm.13`](https://github.com/github/cmark-gfm/releases/tag/0.29.0.gfm.13), thereby [fixing a polynomial time complexity security vulnerability](https://github.com/github/cmark-gfm/security/advisories/GHSA-w4qg-3vf7-m9x5).

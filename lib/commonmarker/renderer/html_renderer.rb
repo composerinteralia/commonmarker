@@ -43,7 +43,7 @@ module CommonMarker
           start = if node.list_start == 1
             "<ol#{sourcepos(node)}>\n"
           else
-            "<ol start=\"#{node.list_start}\"#{sourcepos(node)}>\n"
+            "<ol#{sourcepos(node)} start=\"#{node.list_start}\">\n"
           end
           container(start, "</ol>") do
             out(:children)
@@ -163,12 +163,12 @@ module CommonMarker
     end
 
     def linebreak(_node)
-      out("<br />\n")
+      out("<br#{sourcepos(_node)} />\n")
     end
 
     def softbreak(_)
       if option_enabled?(:HARDBREAKS)
-        out("<br />\n")
+        out("<br#{sourcepos(_)} />\n")
       elsif option_enabled?(:NOBREAKS)
         out(" ")
       else
@@ -208,7 +208,7 @@ module CommonMarker
       when :center then ' align="center"'
       else; ""
       end
-      out(@in_header ? "<th#{align}#{sourcepos(node)}>" : "<td#{align}#{sourcepos(node)}>", :children, @in_header ? "</th>\n" : "</td>\n")
+      out(@in_header ? "<th#{sourcepos(node)}#{align}>" : "<td#{sourcepos(node)}#{align}>", :children, @in_header ? "</th>\n" : "</td>\n")
       @column_index += 1
     end
 

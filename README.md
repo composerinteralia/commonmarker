@@ -2,8 +2,11 @@
 
 ![Build Status](https://github.com/gjtorikian/commonmarker/workflows/CI/badge.svg) [![Gem Version](https://badge.fury.io/rb/commonmarker.svg)](http://badge.fury.io/rb/commonmarker)
 
-Ruby wrapper for [libcmark-gfm](https://github.com/github/cmark),
-GitHub's fork of the reference parser for CommonMark. It passes all of the C tests, and is therefore spec-complete. It also includes extensions to the CommonMark spec as documented in the [GitHub Flavored Markdown spec](http://github.github.com/gfm/), such as support for tables, strikethroughs, and autolinking.
+Ruby wrapper for [Comrak](https://github.com/kivikakk/comrak), accessed through
+Ruby's Fiddle API and a small Rust shared library. It passes the bundled
+CommonMark conformance tests and includes extensions from the
+[GitHub Flavored Markdown spec](http://github.github.com/gfm/), such as tables,
+strikethroughs, and autolinking.
 
 For more information on available extensions, see [the documentation below](#extensions).
 
@@ -20,6 +23,8 @@ And then execute:
 Or install it yourself as:
 
     $ gem install commonmarker
+
+Building the gem from source requires a Rust toolchain with Cargo.
 
 ## Usage
 

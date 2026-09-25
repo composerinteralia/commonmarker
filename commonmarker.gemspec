@@ -7,15 +7,15 @@ require "commonmarker/version"
 Gem::Specification.new do |s|
   s.name = "commonmarker"
   s.version = CommonMarker::VERSION
-  s.summary = "CommonMark parser and renderer. Written in C, wrapped in Ruby."
-  s.description = "A fast, safe, extensible parser for CommonMark. This wraps the official libcmark library."
+  s.summary = "CommonMark parser and renderer powered by Comrak."
+  s.description = "A fast, safe, extensible parser for CommonMark. This uses Comrak through Ruby's Fiddle API."
   s.authors = ["Garen Torikian", "Ashe Connor"]
   s.homepage = "https://github.com/gjtorikian/commonmarker"
   s.license = "MIT"
 
   s.files         = ["LICENSE.txt", "README.md", "Rakefile", "commonmarker.gemspec", "bin/commonmarker"]
   s.files        += Dir.glob("lib/**/*.rb")
-  s.files        += Dir.glob("ext/commonmarker/*.*")
+  s.files        += Dir.glob("ext/commonmarker/{Cargo.lock,Cargo.toml,comrak_ffi.h,extconf.rb,src/**/*.rs}")
   s.extensions    = ["ext/commonmarker/extconf.rb"]
 
   s.executables = ["commonmarker"]
@@ -24,7 +24,7 @@ Gem::Specification.new do |s|
 
   s.metadata["rubygems_mfa_required"] = "true"
 
-  s.rdoc_options += ["-x", "ext/commonmarker/cmark/.*"]
+  s.add_dependency("fiddle", ">= 1.1")
 
   s.add_development_dependency("awesome_print")
   s.add_development_dependency("json", "~> 2.3")

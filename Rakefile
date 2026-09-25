@@ -14,8 +14,10 @@ task default: [:test]
 gem_spec = Gem::Specification.load("commonmarker.gemspec")
 
 # Ruby Extension
-Rake::ExtensionTask.new("commonmarker", gem_spec) do |ext|
+Rake::ExtensionTask.new("commonmarker_ffi", gem_spec) do |ext|
+  ext.ext_dir = "ext/commonmarker"
   ext.lib_dir = File.join("lib", "commonmarker")
+  ext.source_pattern = "**/*.{h,lock,rb,rs,toml}"
 end
 
 # Packaging

@@ -1,7 +1,6 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-require "commonmarker/commonmarker"
 require "commonmarker/config"
 require "commonmarker/node"
 require "commonmarker/renderer"
@@ -12,7 +11,13 @@ begin
   require "awesome_print"
 rescue LoadError; end # rubocop:disable Lint/SuppressedException
 module CommonMarker
+  EXTENSIONS = %w[table tasklist strikethrough autolink tagfilter].freeze
+
   class << self
+    def extensions
+      EXTENSIONS
+    end
+
     # Public:  Parses a Markdown string into an HTML string.
     #
     # text - A {String} of text
