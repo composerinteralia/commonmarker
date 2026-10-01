@@ -82,14 +82,14 @@ fn handle_request(request: Request) -> Result<Value, String> {
             let options = build_options(request.options, &request.extensions, request.width);
             let arena = Arena::new();
             let root = parse_document(&arena, &request.markdown, &options);
-            apply_compatibility_transforms(root, &request.markdown, request.options);
+            apply_compatibility_transforms(&arena, root, &request.markdown, request.options);
             serde_json::to_value(WireNode::from_comrak(root)).map_err(|error| error.to_string())
         }
         "render_markdown" => {
             let options = build_options(request.options, &request.extensions, request.width);
             let arena = Arena::new();
             let root = parse_document(&arena, &request.markdown, &options);
-            apply_compatibility_transforms(root, &request.markdown, request.options);
+            apply_compatibility_transforms(&arena, root, &request.markdown, request.options);
             render(
                 root,
                 &options,
@@ -169,6 +169,7 @@ fn flatten_nested_strong<'a>(root: &'a AstNode<'a>) {
 }
 
 fn apply_compatibility_transforms<'a>(
+    arena: &'a Arena<'a>,
     root: &'a AstNode<'a>,
     markdown: &str,
     option_bits: u32,
@@ -190,6 +191,12 @@ fn apply_compatibility_transforms<'a>(
                 child_ast.sourcepos.end.line += 1;
                 child_ast.sourcepos.end.column = 0;
             }
+        }
+    }
+
+    if option_bits & (1 << 12) != 0 {
+        for node in &nodes {
+            convert_liberal_html_tags(arena, node, &lines);
         }
     }
 
@@ -225,6 +232,83 @@ fn apply_compatibility_transforms<'a>(
             }
         }
     }
+}
+
+fn convert_liberal_html_tags<'a>(
+    arena: &'a Arena<'a>,
+    node: &'a AstNode<'a>,
+    lines: &[&str],
+) {
+    let ast = node.data.borrow();
+    let NodeValue::Text(text) = &ast.value else {
+        return;
+    };
+    let sourcepos = ast.sourcepos;
+    if sourcepos.start.line != sourcepos.end.line {
+        return;
+    }
+    let Some(source) = lines
+        .get(sourcepos.start.line.saturating_sub(1))
+        .and_then(|line| {
+            line.get(
+                sourcepos.start.column.saturating_sub(1)
+                    ..sourcepos.end.column.min(line.len()),
+            )
+        })
+    else {
+        return;
+    };
+    if source != text {
+        return;
+    }
+    let text = text.to_string();
+    let segments = liberal_html_segments(&text);
+    if segments.len() == 1 && !segments[0].1 {
+        return;
+    }
+    drop(ast);
+
+    let mut column = sourcepos.start.column;
+    for (literal, is_html) in segments {
+        let end_column = column + literal.len().saturating_sub(1);
+        let segment_sourcepos =
+            Sourcepos::from((sourcepos.start.line, column, sourcepos.end.line, end_column));
+        let value = if is_html {
+            NodeValue::HtmlInline(literal.to_owned())
+        } else {
+            NodeValue::Text(Cow::Owned(literal.to_owned()))
+        };
+        let segment = arena.alloc(Ast::new_with_sourcepos(value, segment_sourcepos).into());
+        node.insert_before(segment);
+        column = end_column + 1;
+    }
+    node.detach();
+}
+
+fn liberal_html_segments(text: &str) -> Vec<(&str, bool)> {
+    let Some(start) = text.find('<') else {
+        return vec![(text, false)];
+    };
+    let line_end = text[start + 1..]
+        .find(['\n', '\0'])
+        .map_or(text.len(), |offset| start + 1 + offset);
+    let Some(end) = text[start + 1..line_end].rfind('>') else {
+        return vec![(text, false)];
+    };
+    let end = start + 1 + end + 1;
+    if end <= start + 2 {
+        return vec![(text, false)];
+    }
+
+    let mut segments = Vec::with_capacity(3);
+    if start > 0 {
+        segments.push((&text[..start], false));
+    }
+    segments.push((&text[start..end], true));
+    if end < text.len() {
+        segments.push((&text[end..], false));
+    }
+    segments
 }
 
 fn build_options(option_bits: u32, extensions: &[String], width: Option<usize>) -> Options<'static> {

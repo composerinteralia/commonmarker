@@ -34,4 +34,27 @@ class TestExtensions < Minitest::Test
       assert_includes(out, %(<pre><code class="language-ruby" data-meta="my � string">))
     end
   end
+
+  def test_liberal_html_tag
+    word = "galatasaray osmanlispor maci canli izle"
+    tagged_word = word.each_char.map { |character| character == " " ? character : "<K!%K>#{character}</K!%K>" }.join
+    markdown = %(<placeholder class="border">#<a href="https://example.com">#{tagged_word}</a></placeholder>)
+    extensions = [:table, :strikethrough, :tagfilter, :autolink]
+
+    document = CommonMarker.render_doc(markdown, :LIBERAL_HTML_TAG, extensions)
+
+    assert_equal(
+      "<p><placeholder class=\"border\">#<a href=\"https://example.com\">#{tagged_word}</a></placeholder></p>\n",
+      document.to_html([:UNSAFE, :GITHUB_PRE_LANG, :HARDBREAKS], extensions),
+    )
+
+    escaped_document = CommonMarker.render_doc(markdown, :DEFAULT, extensions)
+    assert_includes(escaped_document.to_html(:UNSAFE, extensions), "&lt;K!%K&gt;g&lt;/K!%K&gt;")
+
+    escaped_tags = CommonMarker.render_doc('\<K!%K>x</K!%K> &lt;K!%K>x&lt;/K!%K&gt;', :LIBERAL_HTML_TAG)
+    assert_equal(
+      "<p>&lt;K!%K&gt;x&lt;/K!%K&gt; &lt;K!%K&gt;x&lt;/K!%K&gt;</p>\n",
+      escaped_tags.to_html(:UNSAFE),
+    )
+  end
 end
