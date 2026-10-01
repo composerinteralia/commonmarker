@@ -43,4 +43,18 @@ class TestPlaintext < Minitest::Test
       | c | d |
     PLAINTEXT
   end
+
+  def test_collapses_spaces_in_text_but_not_code
+    markdown = "Test  script  with a code block ```html script alert( hi ) /script ``` with text after"
+    document = CommonMarker.render_doc(markdown, :DEFAULT, %i[strikethrough table])
+
+    assert_equal(
+      "Test script with a code block html script alert( hi ) /script  with text after\n",
+      document.to_plaintext,
+    )
+    assert_equal(
+      "Test  script  with a code block html script alert( hi ) /script  with text after\n",
+      document.to_plaintext(:DEFAULT, 0),
+    )
+  end
 end

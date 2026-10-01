@@ -131,7 +131,10 @@ fn render<'a>(
         "xml" => format_xml(root, options, &mut output),
         "commonmark" => format_commonmark(root, options, &mut output),
         "plaintext" => {
-            format_plaintext(root, &mut output);
+            let collapse_spaces = options.render.width > 0
+                && option_bits & (1 << 4) == 0
+                && option_bits & (1 << 2) == 0;
+            format_plaintext(root, &mut output, collapse_spaces);
             Ok(())
         }
         _ => return Err(format!("unknown format `{format}`")),
@@ -569,10 +572,10 @@ fn alignment_name(alignment: &TableAlignment) -> &'static str {
     }
 }
 
-fn format_plaintext<'a>(node: &'a AstNode<'a>, output: &mut String) {
+fn format_plaintext<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_spaces: bool) {
     let children = node.children().collect::<Vec<_>>();
     for (index, child) in children.iter().enumerate() {
-        format_plain_block(child, output);
+        format_plain_block(child, output, collapse_spaces);
         if index + 1 < children.len() {
             if !output.ends_with('\n') {
                 output.push('\n');
@@ -587,11 +590,11 @@ fn format_plaintext<'a>(node: &'a AstNode<'a>, output: &mut String) {
     }
 }
 
-fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String) {
+fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_spaces: bool) {
     use std::fmt::Write;
 
     match node.data.borrow().value.clone() {
-        NodeValue::Paragraph => format_plain_inlines(node, output),
+        NodeValue::Paragraph => format_plain_inlines(node, output, collapse_spaces),
         NodeValue::List(list) => {
             for (index, item) in node.children().enumerate() {
                 if list.list_type == ListType::Ordered {
@@ -600,7 +603,7 @@ fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String) {
                     output.push_str("  - ");
                 }
                 if let Some(first) = item.first_child() {
-                    format_plain_block(first, output);
+                    format_plain_block(first, output, collapse_spaces);
                 }
                 output.push('\n');
             }
@@ -614,7 +617,7 @@ fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String) {
                 output.push('|');
                 for cell in row.children() {
                     output.push(' ');
-                    format_plain_inlines(cell, output);
+                    format_plain_inlines(cell, output, collapse_spaces);
                     output.push_str(" |");
                 }
                 output.push('\n');
@@ -631,15 +634,25 @@ fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String) {
         NodeValue::CodeBlock(code) => output.push_str(code.literal.trim_end_matches('\n')),
         NodeValue::BlockQuote => {
             for child in node.children() {
-                format_plain_block(child, output);
+                format_plain_block(child, output, collapse_spaces);
             }
         }
-        _ => format_plain_inlines(node, output),
+        _ => format_plain_inlines(node, output, collapse_spaces),
     }
 }
 
-fn format_plain_inlines<'a>(node: &'a AstNode<'a>, output: &mut String) {
+fn format_plain_inlines<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_spaces: bool) {
     match node.data.borrow().value.clone() {
+        NodeValue::Text(text) if collapse_spaces => {
+            let mut previous_was_space = false;
+            for character in text.chars() {
+                if character == ' ' && previous_was_space {
+                    continue;
+                }
+                previous_was_space = character == ' ';
+                output.push(character);
+            }
+        }
         NodeValue::Text(text) => output.push_str(&text),
         NodeValue::Code(code) => output.push_str(&code.literal),
         NodeValue::SoftBreak | NodeValue::LineBreak => output.push('\n'),
@@ -649,13 +662,13 @@ fn format_plain_inlines<'a>(node: &'a AstNode<'a>, output: &mut String) {
         NodeValue::Strikethrough => {
             output.push('~');
             for child in node.children() {
-                format_plain_inlines(child, output);
+                format_plain_inlines(child, output, collapse_spaces);
             }
             output.push('~');
         }
         _ => {
             for child in node.children() {
-                format_plain_inlines(child, output);
+                format_plain_inlines(child, output, collapse_spaces);
             }
         }
     }
