@@ -21,4 +21,18 @@ class TestAttributes < Minitest::Test
 
     assert_equal(result, sourcepos)
   end
+
+  def test_list_sourcepos_includes_all_trailing_blank_lines
+    document = CommonMarker.render_doc("- [ ] a\n- [ ] b\n\n\n")
+    list = document.first_child
+
+    assert_equal(
+      { start_line: 1, start_column: 1, end_line: 4, end_column: 0 },
+      list.sourcepos,
+    )
+    assert_equal(
+      { start_line: 2, start_column: 1, end_line: 4, end_column: 0 },
+      list.last_child.sourcepos,
+    )
+  end
 end

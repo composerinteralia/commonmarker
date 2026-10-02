@@ -195,17 +195,23 @@ fn apply_compatibility_transforms<'a>(
                 ast.value = NodeValue::HtmlInline(literal.to_owned());
             }
         }
-        if matches!(ast.value, NodeValue::List(_))
-            && lines
+        if matches!(ast.value, NodeValue::List(_)) {
+            let original_end_line = ast.sourcepos.end.line;
+            while lines
                 .get(ast.sourcepos.end.line)
                 .is_some_and(|line| line.is_empty())
-        {
-            ast.sourcepos.end.line += 1;
+            {
+                ast.sourcepos.end.line += 1;
+            }
+            let added_lines = ast.sourcepos.end.line - original_end_line;
+            if added_lines == 0 {
+                continue;
+            }
             ast.sourcepos.end.column = 0;
             drop(ast);
             if let Some(last_child) = node.last_child() {
                 let mut child_ast = last_child.data.borrow_mut();
-                child_ast.sourcepos.end.line += 1;
+                child_ast.sourcepos.end.line += added_lines;
                 child_ast.sourcepos.end.column = 0;
             }
         }
