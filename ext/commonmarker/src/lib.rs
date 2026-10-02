@@ -81,14 +81,16 @@ fn handle_request(request: Request) -> Result<Value, String> {
         "parse" => {
             let options = build_options(request.options, &request.extensions, request.width);
             let arena = Arena::new();
-            let root = parse_document(&arena, &request.markdown, &options);
+            let parse_markdown = normalize_liberal_html_whitespace(&request.markdown, request.options);
+            let root = parse_document(&arena, &parse_markdown, &options);
             apply_compatibility_transforms(&arena, root, &request.markdown, request.options);
             serde_json::to_value(WireNode::from_comrak(root)).map_err(|error| error.to_string())
         }
         "render_markdown" => {
             let options = build_options(request.options, &request.extensions, request.width);
             let arena = Arena::new();
-            let root = parse_document(&arena, &request.markdown, &options);
+            let parse_markdown = normalize_liberal_html_whitespace(&request.markdown, request.options);
+            let root = parse_document(&arena, &parse_markdown, &options);
             apply_compatibility_transforms(&arena, root, &request.markdown, request.options);
             let legacy_markers = mark_legacy_numeric_noncharacters(root, &request.markdown);
             render(
@@ -182,6 +184,13 @@ fn apply_compatibility_transforms<'a>(
     let nodes = root.descendants().collect::<Vec<_>>();
     for node in &nodes {
         let mut ast = node.data.borrow_mut();
+        if matches!(ast.value, NodeValue::HtmlInline(_))
+            && ast.sourcepos.start.line == ast.sourcepos.end.line
+        {
+            if let Some(literal) = source_literal(&lines, ast.sourcepos) {
+                ast.value = NodeValue::HtmlInline(literal.to_owned());
+            }
+        }
         if matches!(ast.value, NodeValue::List(_))
             && lines
                 .get(ast.sourcepos.end.line)
@@ -238,6 +247,42 @@ fn apply_compatibility_transforms<'a>(
     }
 }
 
+fn normalize_liberal_html_whitespace(markdown: &str, option_bits: u32) -> Cow<'_, str> {
+    if option_bits & (1 << 12) == 0 || !markdown.contains('\u{a0}') {
+        return Cow::Borrowed(markdown);
+    }
+
+    let mut output = markdown.as_bytes().to_vec();
+    let mut inside_tag = false;
+    let mut position = 0;
+    while position < output.len() {
+        match output[position] {
+            b'<' => inside_tag = true,
+            b'>' | b'\n' | 0 => inside_tag = false,
+            0xc2 if inside_tag && output.get(position + 1) == Some(&0xa0) => {
+                output[position] = b' ';
+                output[position + 1] = b' ';
+                position += 1;
+            }
+            _ => {}
+        }
+        position += 1;
+    }
+
+    Cow::Owned(String::from_utf8(output).expect("replacing NBSP preserves UTF-8"))
+}
+
+fn source_literal<'a>(lines: &[&'a str], sourcepos: Sourcepos) -> Option<&'a str> {
+    lines
+        .get(sourcepos.start.line.saturating_sub(1))
+        .and_then(|line| {
+            line.get(
+                sourcepos.start.column.saturating_sub(1)
+                    ..sourcepos.end.column.min(line.len()),
+            )
+        })
+}
+
 fn convert_liberal_html_tags<'a>(
     arena: &'a Arena<'a>,
     node: &'a AstNode<'a>,
@@ -251,15 +296,7 @@ fn convert_liberal_html_tags<'a>(
     if sourcepos.start.line != sourcepos.end.line {
         return;
     }
-    let Some(source) = lines
-        .get(sourcepos.start.line.saturating_sub(1))
-        .and_then(|line| {
-            line.get(
-                sourcepos.start.column.saturating_sub(1)
-                    ..sourcepos.end.column.min(line.len()),
-            )
-        })
-    else {
+    let Some(source) = source_literal(lines, sourcepos) else {
         return;
     };
     if source != text {

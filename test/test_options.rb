@@ -73,4 +73,17 @@ class TestExtensions < Minitest::Test
     assert_equal(expected.b, output.b)
     refute_predicate(output, :valid_encoding?)
   end
+
+  def test_liberal_html_tags_with_nbsp_attribute_whitespace
+    markdown = " \n<b></b>\n \n<c></c>\n<a   href='http://hoz.blogspot.com'> <img  src='http://example.com/whatever.jpg'  ></a>"
+    extensions = [:table, :strikethrough, :tagfilter, :autolink]
+
+    output = CommonMarker.render_doc(markdown, :LIBERAL_HTML_TAG, extensions)
+      .to_html([:UNSAFE, :GITHUB_PRE_LANG, :HARDBREAKS], extensions)
+
+    assert_equal(
+      "<p> <br />\n<b></b><br />\n <br />\n<c></c><br />\n<a   href='http://hoz.blogspot.com'> <img  src='http://example.com/whatever.jpg'  ></a></p>\n",
+      output,
+    )
+  end
 end
