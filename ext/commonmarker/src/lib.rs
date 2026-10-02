@@ -90,11 +90,13 @@ fn handle_request(request: Request) -> Result<Value, String> {
             let arena = Arena::new();
             let root = parse_document(&arena, &request.markdown, &options);
             apply_compatibility_transforms(&arena, root, &request.markdown, request.options);
+            let legacy_markers = mark_legacy_numeric_noncharacters(root, &request.markdown);
             render(
                 root,
                 &options,
                 request.format.as_deref().unwrap_or("html"),
                 request.options,
+                legacy_markers,
             )
         }
         "render_ast" => {
@@ -110,6 +112,7 @@ fn handle_request(request: Request) -> Result<Value, String> {
                 &options,
                 request.format.as_deref().unwrap_or("html"),
                 request.options,
+                None,
             )
         }
         operation => Err(format!("unknown operation `{operation}`")),
@@ -121,6 +124,7 @@ fn render<'a>(
     options: &Options<'_>,
     format: &str,
     option_bits: u32,
+    legacy_markers: Option<(char, char)>,
 ) -> Result<Value, String> {
     let mut output = String::new();
     match format {
@@ -146,7 +150,7 @@ fn render<'a>(
             .replace(r#" align="center""#, r#" style="text-align: center""#)
             .replace(r#" align="right""#, r#" style="text-align: right""#);
     }
-    Ok(Value::String(output))
+    Ok(legacy_output_value(output, legacy_markers))
 }
 
 fn flatten_nested_strong<'a>(root: &'a AstNode<'a>) {
@@ -309,6 +313,156 @@ fn liberal_html_segments(text: &str) -> Vec<(&str, bool)> {
         segments.push((&text[end..], false));
     }
     segments
+}
+
+fn mark_legacy_numeric_noncharacters<'a>(
+    root: &'a AstNode<'a>,
+    markdown: &str,
+) -> Option<(char, char)> {
+    let markers = legacy_markers(markdown)?;
+    let lines = markdown.lines().collect::<Vec<_>>();
+
+    for node in root.descendants() {
+        let mut ast = node.data.borrow_mut();
+        let NodeValue::Text(text) = &ast.value else {
+            continue;
+        };
+        if ast.sourcepos.start.line != ast.sourcepos.end.line {
+            continue;
+        }
+        let Some(line) = lines.get(ast.sourcepos.start.line.saturating_sub(1)) else {
+            continue;
+        };
+        let start = ast.sourcepos.start.column.saturating_sub(1);
+        let end = ast.sourcepos.end.column.min(line.len());
+        let origins = numeric_noncharacter_origins(line, start, end);
+        if origins.is_empty() {
+            continue;
+        }
+
+        let mut origins = origins.into_iter();
+        let mut changed = false;
+        let mut marked = String::with_capacity(text.len());
+        for character in text.chars() {
+            if character != '\u{fffe}' && character != '\u{ffff}' {
+                marked.push(character);
+                continue;
+            }
+
+            let origin = origins.next();
+            if origin == Some((character, true)) {
+                marked.push(if character == '\u{fffe}' {
+                    markers.0
+                } else {
+                    markers.1
+                });
+                changed = true;
+            } else {
+                marked.push(character);
+            }
+        }
+        if changed {
+            ast.value = NodeValue::Text(Cow::Owned(marked));
+        }
+    }
+
+    Some(markers)
+}
+
+fn legacy_markers(markdown: &str) -> Option<(char, char)> {
+    let mut available = (0xe000..=0xf8ff)
+        .filter_map(char::from_u32)
+        .filter(|character| !markdown.contains(*character));
+    Some((available.next()?, available.next()?))
+}
+
+fn numeric_noncharacter_origins(
+    line: &str,
+    start: usize,
+    end: usize,
+) -> Vec<(char, bool)> {
+    let mut origins = Vec::new();
+    let mut position = start;
+    while position < end {
+        let source = &line[position..end];
+        if let Some((character, length)) = numeric_noncharacter_entity(source) {
+            let escaped = line[..position]
+                .bytes()
+                .rev()
+                .take_while(|byte| *byte == b'\\')
+                .count()
+                % 2
+                == 1;
+            if !escaped {
+                origins.push((character, true));
+                position += length;
+                continue;
+            }
+        }
+
+        let character = source.chars().next().expect("source is not empty");
+        if character == '\u{fffe}' || character == '\u{ffff}' {
+            origins.push((character, false));
+        }
+        position += character.len_utf8();
+    }
+    origins
+}
+
+fn numeric_noncharacter_entity(source: &str) -> Option<(char, usize)> {
+    let bytes = source.as_bytes();
+    if bytes.len() < 4 || bytes[0] != b'&' || bytes[1] != b'#' {
+        return None;
+    }
+
+    let (radix, mut position) = if matches!(bytes.get(2), Some(b'x' | b'X')) {
+        (16, 3)
+    } else {
+        (10, 2)
+    };
+    let digit_start = position;
+    while position < bytes.len()
+        && if radix == 16 {
+            bytes[position].is_ascii_hexdigit()
+        } else {
+            bytes[position].is_ascii_digit()
+        }
+    {
+        position += 1;
+    }
+    if position == digit_start || position >= bytes.len() || bytes[position] != b';' {
+        return None;
+    }
+
+    let value = u32::from_str_radix(&source[digit_start..position], radix).ok()?;
+    let character = match value {
+        0xfffe => '\u{fffe}',
+        0xffff => '\u{ffff}',
+        _ => return None,
+    };
+    Some((character, position + 1))
+}
+
+fn legacy_output_value(output: String, markers: Option<(char, char)>) -> Value {
+    let Some((fffe_marker, ffff_marker)) = markers else {
+        return Value::String(output);
+    };
+
+    let mut replacements = Vec::new();
+    if output.contains(fffe_marker) {
+        replacements.push(json!([fffe_marker.to_string(), 0xfe]));
+    }
+    if output.contains(ffff_marker) {
+        replacements.push(json!([ffff_marker.to_string(), 0xff]));
+    }
+    if replacements.is_empty() {
+        Value::String(output)
+    } else {
+        json!({
+            "__commonmarker_output": output,
+            "legacy_bytes": replacements,
+        })
+    }
 }
 
 fn build_options(option_bits: u32, extensions: &[String], width: Option<usize>) -> Options<'static> {

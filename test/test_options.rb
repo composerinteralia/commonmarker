@@ -49,12 +49,28 @@ class TestExtensions < Minitest::Test
     )
 
     escaped_document = CommonMarker.render_doc(markdown, :DEFAULT, extensions)
+
     assert_includes(escaped_document.to_html(:UNSAFE, extensions), "&lt;K!%K&gt;g&lt;/K!%K&gt;")
 
     escaped_tags = CommonMarker.render_doc('\<K!%K>x</K!%K> &lt;K!%K>x&lt;/K!%K&gt;', :LIBERAL_HTML_TAG)
+
     assert_equal(
       "<p>&lt;K!%K&gt;x&lt;/K!%K&gt; &lt;K!%K&gt;x&lt;/K!%K&gt;</p>\n",
       escaped_tags.to_html(:UNSAFE),
     )
+  end
+
+  def test_preserves_legacy_numeric_noncharacter_bytes
+    extensions = [:table, :strikethrough, :tagfilter, :autolink]
+    render_options = [:UNSAFE, :GITHUB_PRE_LANG, :HARDBREAKS]
+    markdown = "&#xFFFE; \uFFFE &#65535; \uFFFF `&#xFFFE; &#xFFFF;`"
+
+    output = CommonMarker.render_doc(markdown, :LIBERAL_HTML_TAG, extensions)
+      .to_html(render_options, extensions)
+
+    expected = "<p>\xFE \uFFFE \xFF \uFFFF <code>&amp;#xFFFE; &amp;#xFFFF;</code></p>\n"
+
+    assert_equal(expected.b, output.b)
+    refute_predicate(output, :valid_encoding?)
   end
 end

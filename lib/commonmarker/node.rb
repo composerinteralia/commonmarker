@@ -31,16 +31,19 @@ module CommonMarker
           options: options,
           extensions: extensions.map(&:to_s),
           format: "html")
-        normalize_html(output, options).force_encoding(Encoding::UTF_8)
+        output, legacy_bytes = extract_native_output(output)
+        restore_legacy_bytes(normalize_html(output, options), legacy_bytes)
       end
 
       def markdown_to_xml(text, options, extensions)
         validate_extensions(extensions)
-        Native.call("render_markdown",
+        output = Native.call("render_markdown",
           markdown: text,
           options: options,
           extensions: extensions.map(&:to_s),
-          format: "xml").force_encoding(Encoding::UTF_8)
+          format: "xml")
+        output, legacy_bytes = extract_native_output(output)
+        restore_legacy_bytes(output, legacy_bytes)
       end
 
       def parse_document(text, length, options, extensions)
@@ -87,6 +90,20 @@ module CommonMarker
           end
 
           output
+        end
+
+        def extract_native_output(output)
+          return [output, []] unless output.is_a?(Hash) && output.key?("__commonmarker_output")
+
+          [output.fetch("__commonmarker_output"), output.fetch("legacy_bytes")]
+        end
+
+        def restore_legacy_bytes(output, legacy_bytes)
+          output = output.b
+          legacy_bytes.each do |marker, byte|
+            output.gsub!(marker.b, byte.chr)
+          end
+          output.force_encoding(Encoding::UTF_8)
         end
       end
     end
@@ -507,7 +524,8 @@ module CommonMarker
     end
 
     def normalize_output(output, format, options, markdown = nil)
-      case format
+      output, legacy_bytes = self.class.extract_native_output(output)
+      output = case format
       when "html"
         self.class.normalize_html(output, options)
       when "xml"
@@ -515,6 +533,7 @@ module CommonMarker
       else
         output
       end
+      self.class.restore_legacy_bytes(output, legacy_bytes)
     end
 
     def normalize_xml(output)
