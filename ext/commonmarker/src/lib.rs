@@ -137,10 +137,14 @@ fn render<'a>(
         "xml" => format_xml(root, options, &mut output),
         "commonmark" => format_commonmark(root, options, &mut output),
         "plaintext" => {
-            let collapse_spaces = options.render.width > 0
-                && option_bits & (1 << 4) == 0
-                && option_bits & (1 << 2) == 0;
-            format_plaintext(root, &mut output, collapse_spaces);
+            let plaintext_options = PlaintextOptions {
+                collapse_spaces: options.render.width > 0
+                    && option_bits & (1 << 4) == 0
+                    && option_bits & (1 << 2) == 0,
+                softbreak_as_newline: option_bits & (1 << 2) != 0
+                    || (options.render.width == 0 && option_bits & (1 << 4) == 0),
+            };
+            format_plaintext(root, &mut output, plaintext_options);
             Ok(())
         }
         _ => return Err(format!("unknown format `{format}`")),
@@ -847,10 +851,20 @@ fn alignment_name(alignment: &TableAlignment) -> &'static str {
     }
 }
 
-fn format_plaintext<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_spaces: bool) {
+#[derive(Clone, Copy)]
+struct PlaintextOptions {
+    collapse_spaces: bool,
+    softbreak_as_newline: bool,
+}
+
+fn format_plaintext<'a>(
+    node: &'a AstNode<'a>,
+    output: &mut String,
+    options: PlaintextOptions,
+) {
     let children = node.children().collect::<Vec<_>>();
     for (index, child) in children.iter().enumerate() {
-        format_plain_block(child, output, collapse_spaces);
+        format_plain_block(child, output, options);
         if index + 1 < children.len() {
             if !output.ends_with('\n') {
                 output.push('\n');
@@ -865,11 +879,15 @@ fn format_plaintext<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_spa
     }
 }
 
-fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_spaces: bool) {
+fn format_plain_block<'a>(
+    node: &'a AstNode<'a>,
+    output: &mut String,
+    options: PlaintextOptions,
+) {
     use std::fmt::Write;
 
     match node.data.borrow().value.clone() {
-        NodeValue::Paragraph => format_plain_inlines(node, output, collapse_spaces),
+        NodeValue::Paragraph => format_plain_inlines(node, output, options),
         NodeValue::List(list) => {
             for (index, item) in node.children().enumerate() {
                 if list.list_type == ListType::Ordered {
@@ -878,7 +896,7 @@ fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_s
                     output.push_str("  - ");
                 }
                 if let Some(first) = item.first_child() {
-                    format_plain_block(first, output, collapse_spaces);
+                    format_plain_block(first, output, options);
                 }
                 output.push('\n');
             }
@@ -892,7 +910,7 @@ fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_s
                 output.push('|');
                 for cell in row.children() {
                     output.push(' ');
-                    format_plain_inlines(cell, output, collapse_spaces);
+                    format_plain_inlines(cell, output, options);
                     output.push_str(" |");
                 }
                 output.push('\n');
@@ -909,16 +927,20 @@ fn format_plain_block<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_s
         NodeValue::CodeBlock(code) => output.push_str(code.literal.trim_end_matches('\n')),
         NodeValue::BlockQuote => {
             for child in node.children() {
-                format_plain_block(child, output, collapse_spaces);
+                format_plain_block(child, output, options);
             }
         }
-        _ => format_plain_inlines(node, output, collapse_spaces),
+        _ => format_plain_inlines(node, output, options),
     }
 }
 
-fn format_plain_inlines<'a>(node: &'a AstNode<'a>, output: &mut String, collapse_spaces: bool) {
+fn format_plain_inlines<'a>(
+    node: &'a AstNode<'a>,
+    output: &mut String,
+    options: PlaintextOptions,
+) {
     match node.data.borrow().value.clone() {
-        NodeValue::Text(text) if collapse_spaces => {
+        NodeValue::Text(text) if options.collapse_spaces => {
             let mut previous_was_space = false;
             for character in text.chars() {
                 if character == ' ' && previous_was_space {
@@ -930,20 +952,22 @@ fn format_plain_inlines<'a>(node: &'a AstNode<'a>, output: &mut String, collapse
         }
         NodeValue::Text(text) => output.push_str(&text),
         NodeValue::Code(code) => output.push_str(&code.literal),
-        NodeValue::SoftBreak | NodeValue::LineBreak => output.push('\n'),
+        NodeValue::SoftBreak if options.softbreak_as_newline => output.push('\n'),
+        NodeValue::SoftBreak => output.push(' '),
+        NodeValue::LineBreak => output.push('\n'),
         NodeValue::HtmlBlock(html) => output.push_str(&html.literal),
         NodeValue::HtmlInline(html) => output.push_str(&html),
         NodeValue::FootnoteReference(footnote) => output.push_str(&footnote.name),
         NodeValue::Strikethrough => {
             output.push('~');
             for child in node.children() {
-                format_plain_inlines(child, output, collapse_spaces);
+                format_plain_inlines(child, output, options);
             }
             output.push('~');
         }
         _ => {
             for child in node.children() {
-                format_plain_inlines(child, output, collapse_spaces);
+                format_plain_inlines(child, output, options);
             }
         }
     }

@@ -57,4 +57,14 @@ class TestPlaintext < Minitest::Test
       document.to_plaintext(:DEFAULT, 0),
     )
   end
+
+  def test_softbreaks_follow_render_options
+    document = CommonMarker.render_doc("*version 1*  Carbon  by  double .\nCreated by @sugar5",
+      :DEFAULT, %i[strikethrough table])
+
+    assert_equal("version 1 Carbon by double . Created by @sugar5\n", document.to_plaintext)
+    assert_equal("version 1  Carbon  by  double .\nCreated by @sugar5\n", document.to_plaintext(:DEFAULT, 0))
+    assert_equal("version 1  Carbon  by  double . Created by @sugar5\n", document.to_plaintext(:NOBREAKS, 0))
+    assert_equal("version 1  Carbon  by  double .\nCreated by @sugar5\n", document.to_plaintext(:HARDBREAKS))
+  end
 end
